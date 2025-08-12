@@ -1,0 +1,53 @@
+program = {
+    SOI ~
+    function*
+    ~ EOI
+}
+
+identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+
+dtype = { "?"? ~ identifier }
+
+param = { identifier ~ ":" ~ dtype }
+param_list = { "(" ~ (param ~ ("," ~ param)*)? ~ ")" }
+
+return_type = { "->" ~ dtype }
+
+function = {
+    "fn" ~ identifier ~ param_list ~ return_type? ~ "{" ~ block ~ "}" 
+}
+
+block = {
+    (statement | ("{" ~ block ~ "}"))*
+}
+
+statement = {
+    assign_statement | return_statement | expression
+}
+assign_statement = {
+    "let" ~ identifier ~ "=" ~ expression ~ ";"
+}
+return_statement = {
+    "return" ~ expression ~ ";"
+}
+
+expression = {
+    term ~ (binary_op ~ term)*
+}
+
+term = _{ number | boolean | identifier | "(" ~ expression ~ ")" }
+
+number = @{ "-"? ~ ASCII_DIGIT+ }
+boolean = @{ "true" | "false" }
+
+binary_op = _{
+    arithmetic_op
+}
+
+arithmetic_op = _{ add | subtract | multiply | divide }
+add = { "+" }
+subtract = { "-" }
+multiply = { "*" }
+divide = { "/" }
+
+WHITESPACE = _{" " | "\t" | "\n" | "\r" }
