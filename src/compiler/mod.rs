@@ -6,8 +6,7 @@ use inkwell::module::Module;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, IntType};
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 use crate::checker::Substitution;
-use crate::parser::ast::{BinaryOp, Block, DType, Expression, Function, MaybeNull, Program, Statement};
-
+use crate::parser::ast::{BinaryOp, Block, DType, Expression, Function, Program, Spanned, Statement};
 
 #[derive(Debug, Copy, Clone)]
 pub(crate) struct Variable<'ctx> {
@@ -47,35 +46,43 @@ impl<'ctx> Compiler<'ctx> {
             });
     }
 
-    fn compile_statement(&mut self, statement: Statement) {
-        match statement {
+    fn compile_statement(&mut self, statement: Spanned<Statement>) {
+        match statement.node {
             Statement::Assign(assign) => {
                 let typ = self.get_llvm_type(assign.typ.type_idx());
                 let value = self.ir_builder.build_alloca(typ, &assign.identifier).unwrap();
-                let expression = self.compile_expression(assign.expression);
+
+                let Spanned { node, .. } = assign;
+                let expression = self.compile_expression(node.expression.node);
                 self.ir_builder.build_store(value, expression).unwrap();
-                self.symbols.insert(assign.identifier, Variable {
+                self.symbols.insert(node.identifier.node, Variable {
                     typ,
                     addr: value,
                 });
             }
             Statement::Expression(_) => {}
             Statement::Return(return_stat) => {
-                let value = self.compile_expression(return_stat.expression);
+                let Spanned { node, .. } = return_stat;
+                let value = self.compile_expression(node.expression.node);
                 self.ir_builder.build_return(Some(&value.into_int_value())).unwrap();
             }
         }
     }
 
-    fn function_metadata(&mut self, function_ast: Function) -> (String, Vec<String>, Vec<BasicTypeEnum<'ctx>>, BasicTypeEnum<'ctx>, Block) {
-        let (args_names, args_types) = function_ast
-            .param_list
+    fn function_metadata(&mut self, function_ast: Spanned<Function>) -> (String, Vec<String>, Vec<BasicTypeEnum<'ctx>>, BasicTypeEnum<'ctx>, Block) {
+        let Spanned { node, .. } = function_ast;
+        let param_list = node.param_list.node;
+
+        let (args_names, args_types) = param_list
             .params
             .into_iter()
-            .map(|param| (param.name, self.dtype_to_basic_llvm_type(param.typ.typ)))
+            .map(|param| {
+                let typ = self.dtype_to_basic_llvm_type(param.typ.typ);
+                (param.node.name.node, typ)
+            })
             .unzip::<String, BasicTypeEnum, Vec<String>, Vec<BasicTypeEnum>>();
-        let return_type = self.dtype_to_basic_llvm_type(function_ast.return_type.typ);
-        (function_ast.name, args_names, args_types, return_type, function_ast.block)
+        let return_type = self.dtype_to_basic_llvm_type(node.return_type.typ);
+        (node.name.node, args_names, args_types, return_type, node.block.node)
     }
 
     fn compile_function_params(
@@ -98,7 +105,7 @@ impl<'ctx> Compiler<'ctx> {
         Ok(())
     }
 
-    fn compile_function(&mut self, function_ast: Function) -> anyhow::Result<FunctionValue> {
+    fn compile_function(&mut self, function_ast: Spanned<Function>) -> anyhow::Result<FunctionValue> {
         let (
             function_name,
             args_names,
@@ -148,14 +155,15 @@ impl<'ctx> Compiler<'ctx> {
                 value, typ,
             } => {
                 let int_typ = self.get_int_llvm_type(typ.type_idx());
-                int_typ.const_int(value as u64, false).into()
+                int_typ.const_int(value.node as u64, false).into()
             }
-            Expression::BooleanLiteral(value) => self.context.bool_type().const_int(value as u64, false).into(),
+            Expression::BooleanLiteral(value) => self.context.bool_type().const_int(value.node as u64, false).into(),
             Expression::Variable { name, .. } => {
-                let var = &self.symbols[&name];
+                let var = &self.symbols[&name.node];
                 self.ir_builder.build_load(var.typ, self.variable(&name), "").unwrap()
             }
             x @ Expression::BinaryOp { .. } => self.compile_binary_expression(x),
+            Expression::Invoke(_) => todo!(),
         }
     }
 
@@ -164,8 +172,8 @@ impl<'ctx> Compiler<'ctx> {
             Expression::BinaryOp {
                 op, lhs, rhs
             } => {
-                let lhs = self.compile_expression(*lhs);
-                let rhs = self.compile_expression(*rhs);
+                let lhs = self.compile_expression(lhs.node);
+                let rhs = self.compile_expression(rhs.node);
 
                 match op {
                     BinaryOp::Add => {

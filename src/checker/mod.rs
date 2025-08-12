@@ -1,10 +1,12 @@
 use std::cell::{OnceCell, RefCell};
 use std::collections::{HashMap, HashSet};
+use std::iter::zip;
 use std::os::linux::raw::stat;
 use std::sync::{Mutex, OnceLock};
 use std::sync::atomic::{AtomicU64, Ordering};
+use miette::Report;
 use crate::error::{SemanticError};
-use crate::parser::ast::{Block, DType, Expression, Function, MaybeNull, Program, Statement};
+use crate::parser::ast::{Block, DType, Expression, Function, MaybeNull, Program, Span, Spanned, Statement};
 
 static TYPE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -19,9 +21,11 @@ macro_rules! both_known {
 }
 
 pub(crate) struct TypeChecker {
-    symbols: HashMap<String, MaybeNull>,
-    return_type: MaybeNull,
+    symbols: HashMap<String, Spanned<MaybeNull>>,
+    return_type: Spanned<MaybeNull>,
     bounds: HashSet<TypeBound>,
+    functions: HashMap<String, Spanned<Function>>,
+    src: String,
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
@@ -30,19 +34,31 @@ enum TypeBound {
 }
 
 impl TypeChecker {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(src: String) -> Self {
         Self {
             symbols: HashMap::new(),
-            return_type: MaybeNull::unknown(0),
+            return_type: Spanned::new(MaybeNull::unknown(0), Span::empty()),
             bounds: HashSet::new(),
+            functions: HashMap::new(),
+            src,
         }
     }
 
-    fn get_variable_type(&self, name: &str) -> Result<MaybeNull, SemanticError> {
+    fn get_variable_type(&self, name: &str, span: Span) -> Result<Spanned<MaybeNull>, SemanticError> {
         self.symbols
             .get(name)
             .and_then(|typ| Some(typ.clone()))
-            .ok_or(SemanticError::UndefinedVariable(name.to_string()))
+            .ok_or(SemanticError::UndefinedVariable {
+                name: Spanned::new(name.to_string(), span),
+            })
+    }
+
+    fn get_function_define(&self, name: &str, span: Span) -> Result<&Spanned<Function>, SemanticError> {
+        self.functions
+            .get(name)
+            .ok_or(SemanticError::UndefinedFunction {
+                name: Spanned::new(name.to_string(), span),
+            })
     }
 
     pub(crate) fn infer_program(&mut self, program: &Program) -> Result<(), SemanticError> {
@@ -52,17 +68,18 @@ impl TypeChecker {
         Ok(())
     }
 
-    fn infer_function(&mut self, function: &Function) -> Result<(), SemanticError> {
+    fn infer_function(&mut self, function: &Spanned<Function>) -> Result<(), SemanticError> {
         if function.return_type.is_primitive() && function.return_type.is_maybe_null() {
             return Err(SemanticError::MaybeNullOfPrimitiveType {
-                typ: MaybeNull::nonnull(function.return_type.typ),
+                typ: Spanned::new(MaybeNull::nonnull(function.return_type.typ), function.return_type.span),
             });
         }
 
         self.return_type = function.return_type;
+        self.functions.insert((*function.name).clone(), function.clone());
 
         for param in &function.param_list.params {
-            self.symbols.insert(param.name.clone(), param.typ);
+            self.symbols.insert((*param.name).clone(), param.typ);
         }
 
         self.infer_block(&function.block)?;
@@ -70,7 +87,7 @@ impl TypeChecker {
         Ok(())
     }
 
-    fn infer_block(&mut self, block: &Block) -> Result<(), SemanticError> {
+    fn infer_block(&mut self, block: &Spanned<Block>) -> Result<(), SemanticError> {
         let old_symbols = self.symbols.clone();
 
         for statement in &block.statements {
@@ -80,62 +97,71 @@ impl TypeChecker {
         Ok(())
     }
 
-    fn infer_statement(&mut self, statement: &Statement) -> Result<(), SemanticError> {
-        match statement {
+    fn infer_statement(&mut self, statement: &Spanned<Statement>) -> Result<(), SemanticError> {
+        match &statement.node {
             Statement::Expression(expression) => {
                 let _ = self.infer_expression(expression)?;
             }
-            Statement::Return(statement) => {
-                match &statement.expression {
+            Statement::Return(Spanned { node, span }) => {
+                match &*node.expression {
                     Expression::NumberLiteral {
                         value, typ
                     } => {
-                        self.add_bound(TypeBound::Equals(statement.typ, *typ));
+                        self.add_bound(TypeBound::Equals(node.typ, *typ));
                     }
                     Expression::BooleanLiteral(_) => {
-                        self.add_bound(TypeBound::Equals(statement.typ, MaybeNull::nonnull(DType::Bool)));
+                        self.add_bound(TypeBound::Equals(node.typ, MaybeNull::nonnull(DType::Bool)));
                     }
                     Expression::Variable {
                         name, typ,
                     } => {
-                        let defined = self.get_variable_type(name)?;
-                        self.add_bound(TypeBound::Equals(defined, *typ));
-                        self.add_bound(TypeBound::Equals(defined, statement.typ))
+                        let defined = self.get_variable_type(name.as_str(), name.span)?;
+                        self.add_bound(TypeBound::Equals(*defined, *typ));
+                        self.add_bound(TypeBound::Equals(*defined, node.typ))
                     },
                     Expression::BinaryOp {
                         op, lhs, rhs
                     } => {
-                        let typ = self.infer_expression(&statement.expression)?;
+                        let typ = self.infer_expression(&node.expression)?;
 
-                        if both_known!(typ, statement.typ) && typ != self.return_type {
+                        if !typ.is_unknown() && typ != self.return_type.node {
                             return Err(SemanticError::ReturnTypeMismatch {
                                 expected: self.return_type,
-                                found: typ,
+                                found: Spanned::new(typ, node.expression.span),
                             })
                         }
-                        self.add_bound(TypeBound::Equals(typ, statement.typ));
-                        self.add_bound(TypeBound::Equals(typ, self.return_type));
+                        self.add_bound(TypeBound::Equals(typ, node.typ));
+                        self.add_bound(TypeBound::Equals(typ, *self.return_type));
+                    }
+                    Expression::Invoke(invoke) => {
+                        let function = self.get_function_define(&invoke.identifier, invoke.identifier.span)?;
+                        if function.return_type.node != self.return_type.node {
+                            return Err(SemanticError::ReturnTypeMismatch {
+                                expected: self.return_type,
+                                found: function.return_type,
+                            })
+                        }
                     }
                 }
             }
             Statement::Assign(assign) => {
                 let typ = self.infer_expression(&assign.expression)?;
                 self.add_bound(TypeBound::Equals(assign.typ, typ));
-                self.symbols.insert(assign.identifier.clone(), typ);
+                self.symbols.insert(assign.identifier.node.clone(), Spanned::new(typ, Span::empty()));
             }
         }
         Ok(())
     }
 
-    fn infer_expression(&mut self, expression: &Expression) -> Result<MaybeNull, SemanticError> {
-        match expression {
+    fn infer_expression(&mut self, expression: &Spanned<Expression>) -> Result<MaybeNull, SemanticError> {
+        match &expression.node {
             Expression::NumberLiteral {
                 typ, ..
             } => Ok(*typ),
             Expression::BooleanLiteral(_) => Ok(MaybeNull::nonnull(DType::Bool)),
             Expression::Variable { name, typ } => {
-                let defined= self.get_variable_type(name)?;
-                Ok(defined)
+                let defined= self.get_variable_type(name, name.span)?;
+                Ok(defined.node)
             }
             Expression::BinaryOp {
                 op, lhs, rhs
@@ -145,14 +171,42 @@ impl TypeChecker {
 
                 if both_known!(lhs_typ, rhs_typ) && lhs_typ != rhs_typ {
                     return Err(SemanticError::InvalidBinaryOp {
-                        op: op.clone(),
-                        lhs_typ,
-                        rhs_typ,
+                        lhs_typ: Spanned::new(lhs_typ, lhs.span),
+                        rhs_typ: Spanned::new(rhs_typ, rhs.span),
                     });
                 }
 
                 self.add_bound(TypeBound::Equals(lhs_typ, rhs_typ));
                 Ok(lhs_typ)
+            }
+            Expression::Invoke(invoke) => {
+                let name = invoke.identifier.clone();
+                let function = self.get_function_define(&name, invoke.identifier.span)?;
+                let param_list = &function.param_list;
+                let return_type = function.return_type;
+
+                let expected_len = param_list.params.len();
+                let actual_len = invoke.param_list.expressions.len();
+
+                if expected_len != actual_len {
+                    return Err(SemanticError::ArityMismatch {
+                        name: name.clone(),
+                        expected: Spanned::new(expected_len, param_list.span),
+                        found: Spanned::new(actual_len, invoke.param_list.span),
+                    });
+                }
+
+                let mut tasks = Vec::new();
+                for (index, param) in function.param_list.params.iter().enumerate() {
+                    tasks.push((index, param.typ));
+                }
+
+                for (index, param_typ) in tasks {
+                    let invoke_expr = &invoke.param_list.expressions[index];
+                    let expr_typ = self.infer_expression(invoke_expr)?;
+                    self.add_bound(TypeBound::Equals(expr_typ, param_typ.node));
+                }
+                Ok(return_type.node)
             }
         }
     }

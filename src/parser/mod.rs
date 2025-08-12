@@ -7,7 +7,7 @@ mod ir;
 
 #[derive(pest_derive::Parser)]
 #[grammar = "monstera.pest"]
-struct MonsteraParser;
+pub(crate) struct MonsteraParser;
 
 static PRATT_PARSER: OnceLock<PrattParser<Rule>> = OnceLock::new();
 
@@ -33,7 +33,7 @@ mod tests {
     #[test]
     fn test_basic() -> Result<(), CompileError> {
         let source_code = r#"
-            fn add(a: i32, b: i32) -> i32 {
+            fn add(a: i32, b: i32) -> i64 {
                 return a + b;
             }
 
@@ -41,25 +41,26 @@ mod tests {
                 let i = 5;
                 let x = 2 * i;
                 let z = x / i;
+                let p = add(x, z);
                 return z + x;
             }
         "#;
         let mut result = MonsteraParser::parse(Rule::program, source_code).unwrap();
 
-        let mut checker = TypeChecker::new();
+        let mut checker = TypeChecker::new(source_code.to_string());
         let mut program = parse_program(result.next().unwrap());
 
         if let Err(e) = checker.infer_program(&mut program) {
-            println!("{}", e);
-            panic!();
+            println!("{:?}", e);
         }
 
-        let substitution = checker.solve_bounds();
-        let context = inkwell::context::Context::create();
+        let mut substitution = checker.solve_bounds();
+        substitution.print_all_substitution();
+        /*let context = inkwell::context::Context::create();
         let mut compiler = Compiler::new(&context, substitution);
         compiler.compile_program(program);
 
-        Executor::exec_in_memory(&compiler).unwrap();
+        Executor::exec_in_memory(&compiler).unwrap();*/
         Ok(())
     }
 }

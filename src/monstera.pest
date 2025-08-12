@@ -22,7 +22,7 @@ block = {
 }
 
 statement = {
-    assign_statement | return_statement | expression
+    assign_statement | return_statement | (expression ~ ";")
 }
 assign_statement = {
     "let" ~ identifier ~ "=" ~ expression ~ ";"
@@ -35,7 +35,10 @@ expression = {
     term ~ (binary_op ~ term)*
 }
 
-term = _{ number | boolean | identifier | "(" ~ expression ~ ")" }
+term = _{ invoke | number | boolean | identifier | "(" ~ expression ~ ")" }
+
+invoke = { identifier ~ invoke_param_list }
+invoke_param_list = { "(" ~ (expression ~ ("," ~ expression)*) ~ ")"}
 
 number = @{ "-"? ~ ASCII_DIGIT+ }
 boolean = @{ "true" | "false" }
