@@ -6,7 +6,7 @@ use std::sync::{Mutex, OnceLock};
 use std::sync::atomic::{AtomicU64, Ordering};
 use miette::Report;
 use crate::error::{SemanticError};
-use crate::parser::ast::{Block, DType, Expression, Function, MaybeNull, Program, Span, Spanned, Statement};
+use crate::parser::ast::{Block, DType, Either, Expression, Function, MaybeNull, Program, Span, Spanned, Statement};
 
 static TYPE_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -90,8 +90,11 @@ impl TypeChecker {
     fn infer_block(&mut self, block: &Spanned<Block>) -> Result<(), SemanticError> {
         let old_symbols = self.symbols.clone();
 
-        for statement in &block.statements {
-            self.infer_statement(statement)?;
+        for either in &block.statements {
+            match either {
+                Either::Left(statement) => self.infer_statement(statement)?,
+                Either::Right(block) => self.infer_block(block)?,
+            }
         }
         self.symbols = old_symbols;
         Ok(())
@@ -147,8 +150,9 @@ impl TypeChecker {
             Statement::Assign(assign) => {
                 let typ = self.infer_expression(&assign.expression)?;
                 self.add_bound(TypeBound::Equals(assign.typ, typ));
-                self.symbols.insert(assign.identifier.node.clone(), Spanned::new(typ, Span::empty()));
+                self.symbols.insert((*assign.identifier).clone(), Spanned::new(typ, Span::empty()));
             }
+            _ => unreachable!(),
         }
         Ok(())
     }
@@ -350,4 +354,9 @@ impl<'a> BoundSolveContext<'a> {
         let sub = Substitution::new(union_find, substitution, symbols);
         sub
     }
+}
+
+#[cfg(test)]
+mod tests {
+
 }

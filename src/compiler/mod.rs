@@ -1,17 +1,49 @@
-use std::any::Any;
+mod llvm;
+mod context;
+
 use std::collections::HashMap;
 use anyhow::anyhow;
+use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
+use inkwell::IntPredicate;
 use inkwell::module::Module;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, IntType};
-use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, PointerValue};
 use crate::checker::Substitution;
-use crate::parser::ast::{BinaryOp, Block, DType, Expression, Function, Program, Spanned, Statement};
+use crate::parser::ast::{AssignStatement, BinaryOp, Block, ControlStatement, DType, Either, Expression, Function, IfStatement, LoopStatement, Program, ReturnStatement, Spanned, Statement};
+use crate::parser::ast::Statement::If;
+
+macro_rules! build_int_compare {
+    ($this:ident, $lhs:ident, $rhs:ident, $predicate:path) => {
+        match ($lhs.get_type(), $rhs.get_type()) {
+            (BasicTypeEnum::IntType(_), BasicTypeEnum::IntType(_)) => {
+                $this.ir_builder.build_int_compare($predicate, $lhs.into_int_value(), $rhs.into_int_value(), "").unwrap().into()
+            }
+            _ => unreachable!(),
+        }
+    };
+}
+
+macro_rules! build_int_arithmetic {
+    ($this:ident, $lhs:ident, $rhs:ident, $method:ident) => {
+        match ($lhs.get_type(), $rhs.get_type()) {
+            (BasicTypeEnum::IntType(_), BasicTypeEnum::IntType(_)) => {
+                $this.ir_builder.$method($lhs.into_int_value(), $rhs.into_int_value(), "").unwrap().into()
+            }
+            _ => unreachable!(),
+        }
+    };
+}
 
 #[derive(Debug, Copy, Clone)]
 pub(crate) struct Variable<'ctx> {
     pub(crate) typ: BasicTypeEnum<'ctx>,
     pub(crate) addr: PointerValue<'ctx>,
+}
+
+pub(crate) struct LoopContext<'ctx> {
+    continue_block: BasicBlock<'ctx>,
+    break_block: BasicBlock<'ctx>,
 }
 
 pub(crate) struct Compiler<'ctx> {
@@ -21,6 +53,8 @@ pub(crate) struct Compiler<'ctx> {
     context: &'ctx inkwell::context::Context,
     substitution: Substitution,
     current_function: Option<FunctionValue<'ctx>>,
+    loop_context: Vec<LoopContext<'ctx>>,
+    functions: HashMap<String, FunctionValue<'ctx>>,
 }
 
 impl<'ctx> Compiler<'ctx> {
@@ -35,54 +69,172 @@ impl<'ctx> Compiler<'ctx> {
             context,
             current_function: None,
             substitution,
+            loop_context: Vec::new(),
+            functions: HashMap::new(),
         }
     }
 
-    pub(crate) fn compile_program(&mut self, program: Program) {
-        program.functions
-            .into_iter()
-            .for_each(|function| {
-                self.compile_function(function).unwrap();
-            });
+    pub(crate) fn compile_program(&mut self, program: &Program) {
+        for function in &program.functions {
+            let name = (*function.name).clone();
+            self.compile_function(function);
+        }
     }
 
-    fn compile_statement(&mut self, statement: Spanned<Statement>) {
-        match statement.node {
-            Statement::Assign(assign) => {
-                let typ = self.get_llvm_type(assign.typ.type_idx());
-                let value = self.ir_builder.build_alloca(typ, &assign.identifier).unwrap();
+    fn compile_assign_statement(&mut self, assign: &Spanned<AssignStatement>) {
+        let typ = self.get_llvm_type(assign.typ.type_idx());
+        let value = self.ir_builder.build_alloca(typ, &assign.identifier).unwrap();
 
-                let Spanned { node, .. } = assign;
-                let expression = self.compile_expression(node.expression.node);
-                self.ir_builder.build_store(value, expression).unwrap();
-                self.symbols.insert(node.identifier.node, Variable {
-                    typ,
-                    addr: value,
-                });
-            }
+        let expression = self.compile_expression(&assign.expression);
+        self.ir_builder.build_store(value, expression).unwrap();
+        self.symbols.insert((*assign.identifier).clone(), Variable {
+            typ,
+            addr: value,
+        });
+    }
+
+    fn compile_return_statement(&mut self, stat: &Spanned<ReturnStatement>) {
+        let value = self.compile_expression(&stat.expression);
+        self.ir_builder.build_return(Some(&value.into_int_value())).unwrap();
+    }
+
+
+    fn compile_if_statement(&mut self, stat: &Spanned<IfStatement>) {
+        let function = self.ir_builder
+            .get_insert_block()
+            .unwrap()
+            .get_parent()
+            .unwrap();
+
+        let IfStatement {
+            if_block,
+            else_if_block,
+            else_block,
+        } = &stat.node;
+
+        // Create the final merge block first. All branches will eventually jump here.
+        let merge_block = self.context.append_basic_block(function, "if.merge");
+
+        self.ir_builder.position_at_end(merge_block);
+        let phi_node = self.ir_builder.build_phi(self.context.i32_type(), "if.result").unwrap();
+
+        // Create the first block in `if` branch.
+        let then_block = self.context.append_basic_block(function, "if.then");
+
+        // Choose the next block.
+        let first_else_dest = if !else_if_block.is_empty() {
+            self.context.append_basic_block(function, "elseif.cond")
+        } else if else_block.is_some() {
+            self.context.append_basic_block(function, "else.final")
+        } else {
+            merge_block
+        };
+
+        let entry_block = self.ir_builder.get_insert_block().unwrap();
+        self.ir_builder.position_at_end(entry_block);
+
+        let condition = self.compile_expression(&if_block.condition).into_int_value();
+        self.ir_builder.build_conditional_branch(condition, then_block, first_else_dest).unwrap();
+
+        self.ir_builder.position_at_end(then_block);
+        self.compile_block(&if_block.block);
+        phi_node.add_incoming(&[(&self.context.i32_type().const_int(1, false), self.ir_builder.get_insert_block().unwrap())]);
+        self.ir_builder.build_unconditional_branch(merge_block).unwrap();
+
+        let mut current_cond_block = first_else_dest;
+        for (i, else_if) in else_if_block.iter().enumerate() {
+            self.ir_builder.position_at_end(current_cond_block);
+
+            let condition = self.compile_expression(&else_if.condition).into_int_value();
+            let then_block = self.context.append_basic_block(function, &format!("elseif.then.{}", i));
+
+            let next_else_dest = if i < else_if_block.len() - 1 {
+                self.context.append_basic_block(function, &format!("elseif.then.{}", i + 1))
+            } else if else_block.is_some() {
+                self.context.append_basic_block(function, "else.final")
+            } else {
+                merge_block
+            };
+
+            self.ir_builder.build_conditional_branch(condition, then_block, next_else_dest).unwrap();
+            self.ir_builder.position_at_end(then_block);
+            phi_node.add_incoming(&[(&self.context.i32_type().const_int(1, false), self.ir_builder.get_insert_block().unwrap())]);
+            self.ir_builder.build_unconditional_branch(merge_block).unwrap();
+
+            current_cond_block = next_else_dest;
+        }
+
+        if let Some(else_b) = else_block {
+            self.ir_builder.position_at_end(current_cond_block);
+            phi_node.add_incoming(&[(&self.context.i32_type().const_int(1, false), self.ir_builder.get_insert_block().unwrap())]);
+            self.ir_builder.build_unconditional_branch(merge_block).unwrap();
+        }
+
+        self.ir_builder.position_at_end(merge_block);
+    }
+
+    fn compile_loop_statement(&mut self, stat: &Spanned<LoopStatement>) {
+        let function = self.ir_builder.get_insert_block().unwrap().get_parent().unwrap();
+
+        let loop_body = self.context.append_basic_block(function, "loop.body");
+        let after_loop = self.context.append_basic_block(function, "loop.exit");
+
+        self.loop_context.push(LoopContext {
+            continue_block: loop_body,
+            break_block: after_loop,
+        });
+        self.ir_builder.build_unconditional_branch(loop_body).unwrap();
+        self.ir_builder.position_at_end(loop_body);
+
+        self.compile_block(&stat.block);
+
+        // Check whether there are terminator instructions in this block (such as break).
+        if self.ir_builder.get_insert_block().unwrap().get_terminator().is_none() {
+            self.ir_builder.build_unconditional_branch(loop_body).unwrap();
+        }
+        self.loop_context.pop();
+        self.ir_builder.position_at_end(after_loop);
+    }
+
+    fn compile_break(&self) {
+        if let Some(loop_ctx) = self.loop_context.last() {
+            self.ir_builder.build_unconditional_branch(loop_ctx.break_block).unwrap();
+        }
+    }
+
+    fn compile_continue(&self) {
+        if let Some(loop_ctx) = self.loop_context.last() {
+            self.ir_builder.build_unconditional_branch(loop_ctx.continue_block).unwrap();
+        }
+    }
+
+    fn compile_statement(&mut self, statement: &Spanned<Statement>) {
+        match &statement.node {
+            Statement::Assign(assign) => self.compile_assign_statement(assign),
             Statement::Expression(_) => {}
-            Statement::Return(return_stat) => {
-                let Spanned { node, .. } = return_stat;
-                let value = self.compile_expression(node.expression.node);
-                self.ir_builder.build_return(Some(&value.into_int_value())).unwrap();
+            Statement::Return(return_stat) => self.compile_return_statement(return_stat),
+            Statement::Loop(stat) => self.compile_loop_statement(stat),
+            Statement::Control(stat) => match stat.node {
+                ControlStatement::Continue => self.compile_continue(),
+                ControlStatement::Break => self.compile_break(),
             }
+            _ => {}
         }
     }
 
-    fn function_metadata(&mut self, function_ast: Spanned<Function>) -> (String, Vec<String>, Vec<BasicTypeEnum<'ctx>>, BasicTypeEnum<'ctx>, Block) {
-        let Spanned { node, .. } = function_ast;
-        let param_list = node.param_list.node;
+    fn function_metadata<'a>(&mut self, function_ast: &'a Spanned<Function>) -> (String, Vec<String>, Vec<BasicTypeEnum<'ctx>>, BasicTypeEnum<'ctx>, &'a Block) {
+        let param_list = &function_ast.param_list.node;
 
         let (args_names, args_types) = param_list
             .params
-            .into_iter()
+            .iter()
             .map(|param| {
                 let typ = self.dtype_to_basic_llvm_type(param.typ.typ);
-                (param.node.name.node, typ)
+                ((*param.name).clone(), typ)
             })
             .unzip::<String, BasicTypeEnum, Vec<String>, Vec<BasicTypeEnum>>();
-        let return_type = self.dtype_to_basic_llvm_type(node.return_type.typ);
-        (node.name.node, args_names, args_types, return_type, node.block.node)
+        let return_type = self.dtype_to_basic_llvm_type(function_ast.return_type.typ);
+        ((*function_ast.name).clone(), args_names, args_types, return_type, &function_ast.block)
     }
 
     fn compile_function_params(
@@ -105,7 +257,7 @@ impl<'ctx> Compiler<'ctx> {
         Ok(())
     }
 
-    fn compile_function(&mut self, function_ast: Spanned<Function>) -> anyhow::Result<FunctionValue> {
+    fn compile_function(&mut self, function_ast: &Spanned<Function>) -> anyhow::Result<()> {
         let (
             function_name,
             args_names,
@@ -136,20 +288,26 @@ impl<'ctx> Compiler<'ctx> {
         });
 
         if function.verify(true) {
-            return Ok(function);
+            self.functions.insert(function_name, function);
+            return Ok(());
         }
 
         self.module.print_to_string();
         Err(anyhow!("Failed to compile function"))
     }
 
-    fn compile_block(&mut self, block: Block) {
+    fn compile_block(&mut self, block: &Block) {
         block.statements
-            .into_iter()
-            .for_each(|statement| self.compile_statement(statement));
+            .iter()
+            .for_each(|statement| {
+                match statement {
+                    Either::Left(statement) => self.compile_statement(statement),
+                    Either::Right(block) => self.compile_block(block),
+                }
+            });
     }
 
-    fn compile_expression(&mut self, expression: Expression) -> BasicValueEnum<'ctx> {
+    fn compile_expression(&mut self, expression: &Expression) -> BasicValueEnum<'ctx> {
         match expression {
             Expression::NumberLiteral {
                 value, typ,
@@ -163,51 +321,49 @@ impl<'ctx> Compiler<'ctx> {
                 self.ir_builder.build_load(var.typ, self.variable(&name), "").unwrap()
             }
             x @ Expression::BinaryOp { .. } => self.compile_binary_expression(x),
-            Expression::Invoke(_) => todo!(),
+            Expression::Invoke(invoke) => {
+                let function_name = (*invoke.identifier).clone();
+                let function = self.functions[&function_name];
+
+                let mut args = Vec::<BasicMetadataValueEnum>::new();
+                for expr in &invoke.param_list.expressions {
+                    let arg_val = self.compile_expression(expr);
+                    args.push(arg_val.into());
+                }
+
+                let call_site_value = self.ir_builder.build_call(
+                    function,
+                    &args,
+                    "tmp_call"
+                ).unwrap();
+
+                call_site_value.try_as_basic_value().left().unwrap()
+            },
         }
     }
 
-    fn compile_binary_expression(&mut self, expression: Expression) -> BasicValueEnum<'ctx> {
+    fn compile_binary_expression(&mut self, expression: &Expression) -> BasicValueEnum<'ctx> {
         match expression {
             Expression::BinaryOp {
                 op, lhs, rhs
             } => {
-                let lhs = self.compile_expression(lhs.node);
-                let rhs = self.compile_expression(rhs.node);
+                let lhs = self.compile_expression(&lhs.node);
+                let rhs = self.compile_expression(&rhs.node);
 
                 match op {
-                    BinaryOp::Add => {
-                        match (lhs.get_type(), rhs.get_type()) {
-                            (BasicTypeEnum::IntType(_), BasicTypeEnum::IntType(_)) => {
-                                self.ir_builder.build_int_add(lhs.into_int_value(), rhs.into_int_value(), "").unwrap().into()
-                            }
-                            _ => unreachable!()
-                        }
-                    }
-                    BinaryOp::Subtract => {
-                        match (lhs.get_type(), rhs.get_type()) {
-                            (BasicTypeEnum::IntType(_), BasicTypeEnum::IntType(_)) => {
-                                self.ir_builder.build_int_sub(lhs.into_int_value(), rhs.into_int_value(), "").unwrap().into()
-                            }
-                            _ => unreachable!()
-                        }
-                    }
-                    BinaryOp::Multiply => {
-                        match (lhs.get_type(), rhs.get_type()) {
-                            (BasicTypeEnum::IntType(_), BasicTypeEnum::IntType(_)) => {
-                                self.ir_builder.build_int_mul(lhs.into_int_value(), rhs.into_int_value(), "").unwrap().into()
-                            }
-                            _ => unreachable!()
-                        }
-                    }
-                    BinaryOp::Divide => {
-                        match (lhs.get_type(), rhs.get_type()) {
-                            (BasicTypeEnum::IntType(_), BasicTypeEnum::IntType(_)) => {
-                                self.ir_builder.build_int_signed_div(lhs.into_int_value(), rhs.into_int_value(), "").unwrap().into()
-                            }
-                            _ => unreachable!()
-                        }
-                    }
+                    BinaryOp::Add => build_int_arithmetic!(self, lhs, rhs, build_int_add),
+                    BinaryOp::Subtract => build_int_arithmetic!(self, lhs, rhs, build_int_sub),
+                    BinaryOp::Multiply => build_int_arithmetic!(self, lhs, rhs, build_int_mul),
+                    BinaryOp::Divide => build_int_arithmetic!(self, lhs, rhs, build_int_signed_div),
+                    // TODO: Implement short-circuit evaluation for logical AND/OR
+                    BinaryOp::And => build_int_arithmetic!(self, lhs, rhs, build_and),
+                    BinaryOp::Or => build_int_arithmetic!(self, lhs, rhs, build_or),
+                    BinaryOp::Equal => build_int_compare!(self, lhs, rhs, IntPredicate::EQ),
+                    BinaryOp::NotEqual => build_int_compare!(self, lhs, rhs, IntPredicate::NE),
+                    BinaryOp::Greater => build_int_compare!(self, lhs, rhs, IntPredicate::SGT),
+                    BinaryOp::GreaterOrEqual => build_int_compare!(self, lhs, rhs, IntPredicate::SGE),
+                    BinaryOp::Less => build_int_compare!(self, lhs, rhs, IntPredicate::SLT),
+                    BinaryOp::LessOrEqual => build_int_compare!(self, lhs, rhs, IntPredicate::SLE),
                     _ => todo!()
                 }
             }

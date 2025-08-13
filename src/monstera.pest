@@ -22,10 +22,11 @@ block = {
 }
 
 statement = {
-    assign_statement | return_statement | (expression ~ ";")
+    assign_statement | return_statement | control_statement | if_statement | loop_statement | (expression ~ ";")
 }
+
 assign_statement = {
-    "let" ~ identifier ~ "=" ~ expression ~ ";"
+    "let" ~ identifier ~ (":" ~ dtype)? ~ "=" ~ expression ~ ";"
 }
 return_statement = {
     "return" ~ expression ~ ";"
@@ -43,14 +44,33 @@ invoke_param_list = { "(" ~ (expression ~ ("," ~ expression)*) ~ ")"}
 number = @{ "-"? ~ ASCII_DIGIT+ }
 boolean = @{ "true" | "false" }
 
+if_statement = { if_block ~ else_if_block* ~ else_block? }
+if_block = { "if" ~ expression ~ "{" ~ block ~ "}" }
+else_if_block = { "else" ~ "if" ~ expression ~ "{" ~ block ~ "}" }
+else_block = { "else" ~ "{" ~ block ~ "}" }
+
+loop_statement = { "loop" ~ "{" ~ block ~ "}" }
+
+control_statement = { control_break | control_continue }
+control_break = { "break" ~ ";" }
+control_continue = { "continue" ~ ";" }
+
 binary_op = _{
     arithmetic_op
 }
 
-arithmetic_op = _{ add | subtract | multiply | divide }
+arithmetic_op = _{ add | subtract | multiply | divide | and | or | equal | not_equal | greater | greater_or_equal | less | less_or_equal }
 add = { "+" }
 subtract = { "-" }
 multiply = { "*" }
 divide = { "/" }
+and = { "&&" }
+or = { "||" }
+equal = { "==" }
+not_equal = { "!=" }
+greater = { ">" }
+greater_or_equal = { ">=" }
+less = { "<" }
+less_or_equal = { "<=" }
 
 WHITESPACE = _{" " | "\t" | "\n" | "\r" }

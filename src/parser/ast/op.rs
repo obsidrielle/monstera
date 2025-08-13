@@ -29,8 +29,8 @@ impl AsRef<str> for BinaryOp {
             Self::Less => "<",
             Self::GreaterOrEqual => ">=",
             Self::LessOrEqual => "<=",
-            Self::And => "&&",
-            Self::Or => "||",
+            Self::And => "and",
+            Self::Or => "or",
         }
     }
 }
@@ -41,6 +41,14 @@ pub(crate) fn parse_binary_op(pair: Pair<Rule>) -> BinaryOp {
         Rule::subtract => BinaryOp::Subtract,
         Rule::multiply => BinaryOp::Multiply,
         Rule::divide => BinaryOp::Divide,
+        Rule::equal => BinaryOp::Equal,
+        Rule::not_equal => BinaryOp::NotEqual,
+        Rule::greater => BinaryOp::Greater,
+        Rule::greater_or_equal => BinaryOp::GreaterOrEqual,
+        Rule::less => BinaryOp::Less,
+        Rule::less_or_equal => BinaryOp::LessOrEqual,
+        Rule::and => BinaryOp::And,
+        Rule::or => BinaryOp::Or,
         _ => todo!(),
     }
 }

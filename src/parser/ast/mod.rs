@@ -28,6 +28,12 @@ use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
 use miette::SourceSpan;
 
+#[derive(Debug, Clone)]
+pub enum Either<T, F> {
+    Left(T),
+    Right(F),
+}
+
 pub(crate) fn parse_spanned_t<T: FromStr>(pair: Pair<Rule>) -> Spanned<T>
 where
     <T as FromStr>::Err: Debug,{
