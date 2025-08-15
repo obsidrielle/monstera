@@ -1,2 +1,1 @@
-pub(crate) struct IRContext {
-}
+pub(crate) struct IRContext {}

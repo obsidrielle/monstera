@@ -1,8 +1,8 @@
-use pest::iterators::Pair;
-use crate::parser::ast::{parse_spanned_t, Spanned};
-use crate::parser::ast::block::{parse_block, Block};
-use crate::parser::ast::types::{parse_maybe_null, MaybeNull};
 use crate::parser::Rule;
+use crate::parser::ast::block::{Block, parse_block};
+use crate::parser::ast::types::{MaybeNull, parse_maybe_null};
+use crate::parser::ast::{Spanned, parse_spanned_t};
+use pest::iterators::Pair;
 
 #[derive(Debug, Clone)]
 pub(crate) struct Param {
@@ -13,10 +13,13 @@ pub(crate) struct Param {
 pub(crate) fn parse_param(pair: Pair<Rule>) -> Spanned<Param> {
     let span = pair.as_span();
     let mut pairs = pair.into_inner();
-    Spanned::new(Param {
-        name: parse_spanned_t(next_pair!(pairs)),
-        typ: parse_maybe_null(next_pair!(pairs)),
-    }, span.into())
+    Spanned::new(
+        Param {
+            name: parse_spanned_t(next_pair!(pairs)),
+            typ: parse_maybe_null(next_pair!(pairs)),
+        },
+        span.into(),
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -26,12 +29,8 @@ pub(crate) struct ParamList {
 
 pub(crate) fn parse_param_list(pair: Pair<Rule>) -> Spanned<ParamList> {
     let span = pair.as_span();
-    let params = pair.into_inner()
-        .map(|pair| parse_param(pair))
-        .collect();
-    Spanned::new(ParamList {
-        params,
-    }, span.into())
+    let params = pair.into_inner().map(|pair| parse_param(pair)).collect();
+    Spanned::new(ParamList { params }, span.into())
 }
 
 #[derive(Debug, Clone)]
@@ -57,10 +56,13 @@ pub(crate) fn parse_function(pair: Pair<Rule>) -> Spanned<Function> {
     let return_type = parse_maybe_null(next_pair!(pairs));
     let block = parse_block(next_pair!(pairs));
 
-    Spanned::new(Function {
-        name,
-        param_list,
-        return_type,
-        block,
-    }, span.into())
+    Spanned::new(
+        Function {
+            name,
+            param_list,
+            return_type,
+            block,
+        },
+        span.into(),
+    )
 }

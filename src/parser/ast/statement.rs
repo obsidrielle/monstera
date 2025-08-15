@@ -1,8 +1,8 @@
-use pest::iterators::Pair;
-use crate::parser::ast::{parse_block, parse_else_block, parse_else_if_block, parse_if_block, parse_spanned_t, Block, ElseBlock, ElseIfBlock, IfBlock, Spanned};
-use crate::parser::ast::expr::{parse_expression, Expression};
-use crate::parser::ast::types::MaybeNull;
 use crate::parser::Rule;
+use crate::parser::ast::expr::{Expression, parse_expression};
+use crate::parser::ast::types::MaybeNull;
+use crate::parser::ast::{Block, ElseBlock, ElseIfBlock, IfBlock, Spanned, parse_block, parse_else_block, parse_else_if_block, parse_if_block, parse_spanned_t, TypeKind};
+use pest::iterators::Pair;
 
 #[derive(Debug, Clone)]
 pub(crate) enum Statement {
@@ -21,15 +21,18 @@ pub(crate) fn parse_statement(pair: Pair<Rule>) -> Spanned<Statement> {
 
     println!("{:#?}", pair.as_rule());
 
-    Spanned::new(match pair.as_rule() {
-        Rule::assign_statement => Statement::Assign(parse_assign_statement(pair)),
-        Rule::return_statement => Statement::Return(parse_return_statement(pair)),
-        Rule::expression => Statement::Expression(parse_expression(pair)),
-        Rule::if_statement => Statement::If(parse_if_statement(pair)),
-        Rule::loop_statement => Statement::Loop(parse_loop_statement(pair)),
-        Rule::control_statement => Statement::Control(parse_control_statement(pair)),
-        _ => unreachable!(),
-    }, span.into())
+    Spanned::new(
+        match pair.as_rule() {
+            Rule::assign_statement => Statement::Assign(parse_assign_statement(pair)),
+            Rule::return_statement => Statement::Return(parse_return_statement(pair)),
+            Rule::expression => Statement::Expression(parse_expression(pair)),
+            Rule::if_statement => Statement::If(parse_if_statement(pair)),
+            Rule::loop_statement => Statement::Loop(parse_loop_statement(pair)),
+            Rule::control_statement => Statement::Control(parse_control_statement(pair)),
+            _ => unreachable!(),
+        },
+        span.into(),
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -42,11 +45,14 @@ pub(crate) struct AssignStatement {
 pub(crate) fn parse_assign_statement(pair: Pair<Rule>) -> Spanned<AssignStatement> {
     let span = pair.as_span();
     let mut pairs = pair.into_inner();
-    Spanned::new(AssignStatement {
-        identifier: parse_spanned_t(next_pair!(pairs)),
-        typ: MaybeNull::alloc_unknown(),
-        expression: parse_expression(next_pair!(pairs)),
-    }, span.into())
+    Spanned::new(
+        AssignStatement {
+            identifier: parse_spanned_t(next_pair!(pairs)),
+            typ: MaybeNull::alloc_unknown(TypeKind::Int),
+            expression: parse_expression(next_pair!(pairs)),
+        },
+        span.into(),
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -58,10 +64,13 @@ pub(crate) struct ReturnStatement {
 pub(crate) fn parse_return_statement(pair: Pair<Rule>) -> Spanned<ReturnStatement> {
     let span = pair.as_span();
     let mut pairs = pair.into_inner();
-    Spanned::new(ReturnStatement {
-        expression: parse_expression(next_pair!(pairs)),
-        typ: MaybeNull::alloc_unknown(),
-    }, span.into())
+    Spanned::new(
+        ReturnStatement {
+            expression: parse_expression(next_pair!(pairs)),
+            typ: MaybeNull::alloc_unknown(TypeKind::Int),
+        },
+        span.into(),
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -70,7 +79,6 @@ pub(crate) struct IfStatement {
     pub(crate) else_if_block: Vec<Spanned<ElseIfBlock>>,
     pub(crate) else_block: Option<Spanned<ElseBlock>>,
 }
-
 
 pub(crate) fn parse_if_statement(pair: Pair<Rule>) -> Spanned<IfStatement> {
     let span = pair.as_span();
@@ -88,11 +96,14 @@ pub(crate) fn parse_if_statement(pair: Pair<Rule>) -> Spanned<IfStatement> {
         }
     }
 
-    Spanned::new(IfStatement {
-        if_block,
-        else_if_block,
-        else_block,
-    }, span.into())
+    Spanned::new(
+        IfStatement {
+            if_block,
+            else_if_block,
+            else_block,
+        },
+        span.into(),
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -102,9 +113,12 @@ pub(crate) struct LoopStatement {
 
 pub(crate) fn parse_loop_statement(pair: Pair<Rule>) -> Spanned<LoopStatement> {
     let span = pair.as_span();
-    Spanned::new(LoopStatement {
-        block: parse_block(pair),
-    }, span.into())
+    Spanned::new(
+        LoopStatement {
+            block: parse_block(pair),
+        },
+        span.into(),
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -120,7 +134,7 @@ pub(crate) fn parse_control_statement(pair: Pair<Rule>) -> Spanned<ControlStatem
     let control = match next_pair!(pairs).as_rule() {
         Rule::control_break => ControlStatement::Break,
         Rule::control_continue => ControlStatement::Continue,
-        _ => unreachable!()
+        _ => unreachable!(),
     };
     Spanned::new(control, span.into())
 }

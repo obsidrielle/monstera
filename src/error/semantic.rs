@@ -1,13 +1,12 @@
-use inkwell::llvm_sys::LLVMYieldCallback;
-use miette::{Diagnostic, Report, SourceSpan};
+use crate::parser::ast::{MaybeNull, Spanned};
+use miette::{Diagnostic, SourceSpan};
 use thiserror::Error;
-use crate::parser::ast::{BinaryOp, MaybeNull, Span, Spanned};
 
 #[derive(Debug)]
 pub enum SemanticError {
     TypeMismatch {
-        expected: MaybeNull,
-        found: MaybeNull,
+        expected: Spanned<MaybeNull>,
+        found: Spanned<MaybeNull>,
     },
 
     UndefinedVariable {
@@ -49,7 +48,7 @@ pub enum SemanticError {
 
     MaybeNullOfPrimitiveType {
         typ: Spanned<MaybeNull>,
-    }
+    },
 }
 
 #[derive(Debug, Error, Diagnostic)]
@@ -69,7 +68,6 @@ pub struct ReturnMismatchDiag {
 #[derive(Debug, Error, Diagnostic)]
 #[error("Arity mismatch")]
 #[diagnostic(code(sematic::arity_mismatch))]
-#[help("")]
 pub struct ArityMismatchDiag {
     #[source_code]
     src: String,
@@ -81,7 +79,47 @@ pub struct ArityMismatchDiag {
     found: usize,
     name: String,
 }
-fn build_return_type_mismatch_diag((expected, found): (Spanned<MaybeNull>, Spanned<MaybeNull>), src: &str) -> ReturnMismatchDiag {
+
+#[derive(Debug, Error, Diagnostic)]
+#[error("Undefined variable")]
+#[diagnostic(code(semantic::undefined_variable))]
+pub struct UndefinedVariableDiag {
+    #[source_code]
+    src: String,
+    #[label("This variable `{variable}` is undefined")]
+    span: SourceSpan,
+    variable: String,
+}
+
+#[derive(Debug, Error, Diagnostic)]
+#[error("Type mismatch")]
+#[diagnostic(code(semantic::type_mismatch))]
+pub struct TypeMismatchDiag {
+    #[source_code]
+    src: String,
+    #[label("This expression expected type `{expected}`")]
+    expected_span: SourceSpan,
+    expected: MaybeNull,
+    #[label("but this type is equal to that, which is `{found}`")]
+    found_span: SourceSpan,
+    found: MaybeNull,
+}
+
+pub(crate) fn build_undefined_variable_diag(
+    variable: Spanned<String>,
+    src: &str,
+) -> UndefinedVariableDiag {
+    UndefinedVariableDiag {
+        src: src.to_string(),
+        span: variable.span.into(),
+        variable: variable.to_string(),
+    }
+}
+
+pub(crate) fn build_return_type_mismatch_diag(
+    (expected, found): (Spanned<MaybeNull>, Spanned<MaybeNull>),
+    src: &str,
+) -> ReturnMismatchDiag {
     ReturnMismatchDiag {
         src: src.to_string(),
         expected_span: expected.span.into(),
@@ -91,7 +129,11 @@ fn build_return_type_mismatch_diag((expected, found): (Spanned<MaybeNull>, Spann
     }
 }
 
-fn build_arity_mismatch_diag(name: String, (expected, found): (Spanned<usize>, Spanned<usize>), src: &str) -> ArityMismatchDiag {
+pub(crate) fn build_arity_mismatch_diag(
+    name: String,
+    (expected, found): (Spanned<usize>, Spanned<usize>),
+    src: &str,
+) -> ArityMismatchDiag {
     ArityMismatchDiag {
         src: src.to_string(),
         expected_span: expected.span.into(),
@@ -102,24 +144,15 @@ fn build_arity_mismatch_diag(name: String, (expected, found): (Spanned<usize>, S
     }
 }
 
-#[derive(Debug, Error, Diagnostic)]
-pub enum SemanticErrorReport {
-    #[error(transparent)]
-    #[diagnostic(transparent)]
-    ReturnTypeMismatch(ReturnMismatchDiag),
-}
-
-#[derive(Debug, Error, Diagnostic)]
-#[error(transparent)]
-#[diagnostic(transparent)]
-pub struct DiagnosticReport(#[from] Box<dyn Diagnostic + Send + Sync>);
-pub fn build_diagnostic(error: SemanticError, src: &str) -> DiagnosticReport {
-    let diagnostic: Box<dyn Diagnostic + Send + Sync> = match error {
-        SemanticError::ReturnTypeMismatch { expected, found } =>
-            Box::new(build_return_type_mismatch_diag((expected, found), src)),
-        SemanticError::ArityMismatch { name, expected, found } =>
-            Box::new(build_arity_mismatch_diag(name.to_string(), (expected, found), src)),
-        _ => unreachable!(),
-    };
-    DiagnosticReport(diagnostic)
+pub(crate) fn build_type_mismatch(
+    (expected, found): (Spanned<MaybeNull>, Spanned<MaybeNull>),
+    src: &str,
+) -> TypeMismatchDiag {
+    TypeMismatchDiag {
+        src: src.to_string(),
+        expected_span: expected.span.into(),
+        expected: *expected,
+        found_span: found.span.into(),
+        found: *found,
+    }
 }

@@ -1,18 +1,26 @@
-use std::fmt::{Display, Formatter};
-use pest::iterators::Pair;
 use crate::parser::Rule;
+use pest::iterators::Pair;
+use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub(crate) enum BinaryOp {
-    Add, Subtract, Multiply, Divide,
-    Equal, NotEqual, Greater, Less, GreaterOrEqual,
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Equal,
+    NotEqual,
+    Greater,
+    Less,
+    GreaterOrEqual,
     LessOrEqual,
-    And, Or,
+    And,
+    Or,
 }
 
 impl Display for BinaryOp {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self)
+        write!(f, "{}", self.as_ref())
     }
 }
 

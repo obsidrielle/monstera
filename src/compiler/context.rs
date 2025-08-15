@@ -1,7 +1,7 @@
-use std::collections::HashMap;
-use inkwell::values::FunctionValue;
 use crate::checker::Substitution;
 use crate::compiler::{LoopContext, Variable};
+use inkwell::values::FunctionValue;
+use std::collections::HashMap;
 
 struct SemanticContext<'ctx> {
     symbols: HashMap<String, Variable<'ctx>>,
