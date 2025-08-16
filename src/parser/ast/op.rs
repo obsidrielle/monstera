@@ -18,6 +18,19 @@ pub(crate) enum BinaryOp {
     Or,
 }
 
+impl BinaryOp {
+    pub fn is_arithmetic(&self) -> bool {
+        matches!(self, Self::Add | Self::Subtract | Self::Multiply | Self::Divide)
+    }
+
+    pub fn is_compare(&self) -> bool {
+        matches!(self, Self::Equal | Self::NotEqual |
+            Self::Greater | Self::GreaterOrEqual |
+            Self::Less | Self::LessOrEqual |
+            Self::And | Self::Or)
+    }
+}
+
 impl Display for BinaryOp {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_ref())

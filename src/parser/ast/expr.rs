@@ -5,6 +5,7 @@ use crate::parser::ast::{Spanned, parse_spanned_t, TypeKind};
 use crate::parser::{Rule, pratt_parser};
 use pest::iterators::Pair;
 use std::fmt::Debug;
+use crate::parser::ast::array::{parse_array, Array};
 
 #[derive(Debug, Clone)]
 pub(crate) enum Expression {
@@ -23,6 +24,7 @@ pub(crate) enum Expression {
         rhs: Box<Spanned<Expression>>,
     },
     Invoke(Spanned<Invoke>),
+    Array(Box<Spanned<Array>>),
 }
 
 pub(crate) fn parse_expression(pair: Pair<Rule>) -> Spanned<Expression> {
@@ -53,6 +55,7 @@ pub(crate) fn parse_expression(pair: Pair<Rule>) -> Spanned<Expression> {
                 Rule::invoke => {
                     Spanned::new(Expression::Invoke(parse_invoke(primary)), span.into())
                 }
+                Rule::array => Spanned::new(Expression::Array(Box::new(parse_array(primary))), span.into()),
                 _ => unreachable!(),
             }
         })

@@ -1,3 +1,13 @@
+mod array;
+mod int;
+mod struct_type;
+mod arena;
+
+use std::collections::HashMap;
+pub use array::*;
+pub use int::*;
+pub use struct_type::*;
+
 use crate::checker::alloc_type_idx;
 use crate::parser::Rule;
 use crate::parser::ast::Spanned;
@@ -5,15 +15,19 @@ use pest::iterators::Pair;
 use std::fmt::{Display, Formatter};
 use std::ops::Deref;
 use std::str::FromStr;
+use lazy_static::lazy_static;
+use crate::parser::ast::types::arena::{type_arena, CompositeType};
 
 pub trait Type {
     fn type_idx(&self) -> u64;
 }
 
-#[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
+#[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Clone, Copy, Hash)]
 pub(crate) enum DType {
     Bool,
     Int(IntType),
+    Array(u64),
+    Struct(u64),
     Void,
     Unknown {
         idx: u64,
@@ -28,6 +42,7 @@ pub(crate) enum TypeKind {
 
 impl TypeKind {
     pub fn default_type(&self) -> MaybeNull {
+        
         match self {
             Self::Int => MaybeNull::nonnull(DType::Int(IntType::I32)),
         }
@@ -39,67 +54,10 @@ impl Type for DType {
         match self {
             Self::Bool => 9,
             Self::Void => 10,
+            Self::Array(array_id) => *array_id,
+            Self::Struct(struct_id) => *struct_id,
             Self::Int(int) => int.type_idx(),
             Self::Unknown { idx, .. } => *idx + 50,
-        }
-    }
-}
-
-#[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Copy, Clone, Hash)]
-pub(crate) enum IntType {
-    I8,
-    I16,
-    I32,
-    I64,
-    U8,
-    U16,
-    U32,
-    U64,
-}
-
-impl Type for IntType {
-    fn type_idx(&self) -> u64 {
-        match self {
-            Self::I8 => 1,
-            Self::I16 => 2,
-            Self::I32 => 3,
-            Self::I64 => 4,
-            Self::U8 => 5,
-            Self::U16 => 6,
-            Self::U32 => 7,
-            Self::U64 => 8,
-        }
-    }
-}
-
-impl FromStr for IntType {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "i8" => Ok(Self::I8),
-            "i16" => Ok(Self::I16),
-            "i32" => Ok(Self::I32),
-            "i64" => Ok(Self::I64),
-            "u8" => Ok(Self::U8),
-            "u16" => Ok(Self::U16),
-            "u32" => Ok(Self::U32),
-            "u64" => Ok(Self::U64),
-            _ => Err(format!("Unknown type: {s}")),
-        }
-    }
-}
-impl Display for IntType {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::I8 => write!(f, "i8"),
-            Self::I16 => write!(f, "i16"),
-            Self::I32 => write!(f, "i32"),
-            Self::I64 => write!(f, "i64"),
-            Self::U8 => write!(f, "u8"),
-            Self::U16 => write!(f, "u16"),
-            Self::U32 => write!(f, "u32"),
-            Self::U64 => write!(f, "u64"),
         }
     }
 }
@@ -111,6 +69,10 @@ impl DType {
 
     pub(crate) fn is_primitive(&self) -> bool {
         matches!(self, Self::Int(_) | Self::Bool | Self::Void)
+    }
+
+    pub(crate) fn is_compositive(&self) -> bool {
+        matches!(self, Self::Array(_) | Self::Struct(_))
     }
 
     pub(crate) fn is_unknown(&self) -> bool {
@@ -133,10 +95,22 @@ impl FromStr for DType {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "bool" => Ok(DType::Bool),
-            "void" => Ok(DType::Void),
-            _ => Ok(DType::Int(s.parse::<IntType>()?)),
+            "bool" => return Ok(DType::Bool),
+            "void" => return Ok(DType::Void),
+            "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" => return Ok(DType::Int(s.parse::<IntType>()?)),
+            _ => {}
         }
+        
+        if let Ok(array) = s.parse::<ArrayType>() {
+            let mut lock = type_arena().lock().unwrap();
+            let index = lock.add_type(CompositeType::Array(array));
+            return Ok(DType::Array(index));
+        }
+        
+        // a struct with type index 0 means it is undefined 
+        let lock = type_arena().lock().unwrap();
+        Ok(DType::Struct(lock.index(s)
+            .unwrap_or(0)))
     }
 }
 
@@ -199,9 +173,12 @@ impl Type for MaybeNull {
     }
 }
 
-impl Into<DType> for MaybeNull {
-    fn into(self) -> DType {
-        self.typ
+impl From<DType> for MaybeNull {
+    fn from(value: DType) -> Self {
+        Self {
+            typ: value,
+            maybe_null: false,
+        }
     }
 }
 
@@ -213,9 +190,9 @@ pub(crate) fn parse_maybe_null(pair: Pair<Rule>) -> Spanned<MaybeNull> {
     pair_str
         .strip_prefix("?")
         .map(|s| Spanned::new(
-                MaybeNull::maybe_null(s.parse().unwrap()),
-                span.into(),
-            ))
+            MaybeNull::maybe_null(s.parse().unwrap()),
+            span.into(),
+        ))
         .unwrap_or_else(|| Spanned::new(MaybeNull::nonnull(pair_str.parse().unwrap()), span.into()))
 }
 

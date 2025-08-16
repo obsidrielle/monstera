@@ -6,7 +6,8 @@ program = {
 
 identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
-dtype = { "?"? ~ identifier }
+dtype = { ("?"? ~ identifier) | array_type }
+array_type = { "[" ~ dtype ~ ";" ~ positive_number ~ "]" }
 
 param = { identifier ~ ":" ~ dtype }
 param_list = { "(" ~ (param ~ ("," ~ param)*)? ~ ")" }
@@ -36,11 +37,12 @@ expression = {
     term ~ (binary_op ~ term)*
 }
 
-term = _{ invoke | number | boolean | identifier | "(" ~ expression ~ ")" }
+term = _{ invoke | number | boolean | identifier | array | "(" ~ expression ~ ")" }
 
-invoke = { identifier ~ invoke_param_list }
+invoke = { "@"? ~ identifier ~ invoke_param_list }
 invoke_param_list = { "(" ~ (expression ~ ("," ~ expression)*) ~ ")"}
 
+positive_number = { '1'..'9' ~ ASCII_DIGIT+ }
 number = @{ "-"? ~ ASCII_DIGIT+ }
 boolean = @{ "true" | "false" }
 
@@ -55,11 +57,20 @@ control_statement = { control_break | control_continue }
 control_break = { "break" ~ ";" }
 control_continue = { "continue" ~ ";" }
 
-binary_op = _{
-    arithmetic_op
+array = {
+    list_expression | repeat_expression
 }
 
-arithmetic_op = _{ add | subtract | multiply | divide | and | or | equal | not_equal | greater | greater_or_equal | less | less_or_equal }
+list_expression = { "[" ~ expression ~ ("," ~ expression)* ~ "]" }
+repeat_expression = { "[" ~ expression ~ ";" ~ positive_number ~ "]" }
+
+binary_op = _{
+    arithmetic_op | logical_op
+}
+
+arithmetic_op = _{ add | subtract | multiply | divide }
+logical_op = _{ and | or | equal | not_equal | greater | greater_or_equal | less | less_or_equal }
+
 add = { "+" }
 subtract = { "-" }
 multiply = { "*" }

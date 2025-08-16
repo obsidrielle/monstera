@@ -53,21 +53,21 @@ pub enum SemanticError {
 
 #[derive(Debug, Error, Diagnostic)]
 #[error("Return type mismatch")]
-#[diagnostic(code(sematic::return_type_mismatch))]
+#[diagnostic(code(semantic::return_type_mismatch))]
 pub struct ReturnMismatchDiag {
     #[source_code]
     src: String,
-    #[label("...as specified here.")]
+    #[label("but the function is declared to return `{expected}`, as specified here")]
     expected_span: SourceSpan,
     expected: MaybeNull,
-    #[label("This expression has type `i32`, but the function is declared to return `i64`...")]
+    #[label("The actual type is `{found}`")]
     found_span: SourceSpan,
     found: MaybeNull,
 }
 
 #[derive(Debug, Error, Diagnostic)]
 #[error("Arity mismatch")]
-#[diagnostic(code(sematic::arity_mismatch))]
+#[diagnostic(code(semantic::arity_mismatch))]
 pub struct ArityMismatchDiag {
     #[source_code]
     src: String,
@@ -97,12 +97,26 @@ pub struct UndefinedVariableDiag {
 pub struct TypeMismatchDiag {
     #[source_code]
     src: String,
-    #[label("This expression expected type `{expected}`")]
+    #[label("This part expected type `{expected}`")]
     expected_span: SourceSpan,
     expected: MaybeNull,
-    #[label("but this type is equal to that, which is `{found}`")]
+    #[label("but this type isn't equal to that, which is `{found}`")]
     found_span: SourceSpan,
     found: MaybeNull,
+}
+
+#[derive(Debug, Error, Diagnostic)]
+#[error("Invalid binary operator")]
+#[diagnostic(code(semantic::invalid_binary_operator))]
+pub struct InvalidBinaryOpDiag {
+    #[source_code]
+    src: String,
+    #[label("left expression has type `{lhs}`")]
+    lhs_span: SourceSpan,
+    lhs: MaybeNull,
+    #[label("but right expression has a different typ `{rhs}`")]
+    rhs_span: SourceSpan,
+    rhs: MaybeNull,
 }
 
 pub(crate) fn build_undefined_variable_diag(
@@ -154,5 +168,18 @@ pub(crate) fn build_type_mismatch(
         expected: *expected,
         found_span: found.span.into(),
         found: *found,
+    }
+}
+
+pub(crate) fn build_invalid_binary_op(
+    (lhs, rhs): (Spanned<MaybeNull>, Spanned<MaybeNull>),
+    src: &str,
+) -> InvalidBinaryOpDiag {
+    InvalidBinaryOpDiag {
+        src: src.to_string(),
+        lhs_span: lhs.span.into(),
+        lhs: *lhs,
+        rhs_span: rhs.span.into(),
+        rhs: *rhs,
     }
 }

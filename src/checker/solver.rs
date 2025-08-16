@@ -143,6 +143,7 @@ impl Debug for Substitution {
 
 impl Substitution {
     pub fn find(&self, idx: u64) -> MaybeNull {
+        println!("idx: {idx}");
         *self.inner.get(&idx).copied().unwrap()
     }
 }

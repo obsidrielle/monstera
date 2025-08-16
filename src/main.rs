@@ -15,18 +15,16 @@ mod parser;
 
 fn main() -> miette::Result<()> {
     let source_code = r#"
-            fn add(a: i64, b: i64) -> i64 {
-                return a + b;
+            fn fab(x: i32) -> i32 {
+                if x == 1 || x == 2 {
+                    return 1;
+                }
+                return fab(x - 1) + fab(x - 2);
             }
 
             fn main() -> i32 {
-                loop {
-                    let t = 1;
-                    if t == 1 {
-                        break;
-                    }
-                }
-                return 0;
+                let result: i32 = fab(40);
+                return result;
             }
         "#;
     let mut result = crate::parser::MonsteraParser::parse(Rule::program, source_code).unwrap();

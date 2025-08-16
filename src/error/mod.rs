@@ -1,11 +1,11 @@
 mod semantic;
+mod parse;
 
 pub use semantic::*;
 
 use crate::error::semantic::{build_arity_mismatch_diag, build_return_type_mismatch_diag};
 use miette::Diagnostic;
 use thiserror::Error;
-
 
 pub(crate) enum CompilerError {}
 
@@ -34,7 +34,10 @@ pub fn build_diagnostic(error: SemanticError, src: &str) -> DiagnosticReport {
         SemanticError::TypeMismatch { expected, found } => {
             Box::new(build_type_mismatch((expected, found), src))
         }
-        _ => unreachable!(),
+        SemanticError::InvalidBinaryOp { lhs_typ, rhs_typ } => {
+            Box::new(build_invalid_binary_op((lhs_typ, rhs_typ), src))
+        }
+        _ => unreachable!()
     };
     DiagnosticReport(diagnostic)
 }

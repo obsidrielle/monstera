@@ -1,7 +1,7 @@
 use crate::parser::Rule;
 use crate::parser::ast::expr::{Expression, parse_expression};
 use crate::parser::ast::types::MaybeNull;
-use crate::parser::ast::{Block, ElseBlock, ElseIfBlock, IfBlock, Spanned, parse_block, parse_else_block, parse_else_if_block, parse_if_block, parse_spanned_t, TypeKind};
+use crate::parser::ast::{Block, ElseBlock, ElseIfBlock, IfBlock, Spanned, parse_block, parse_else_block, parse_else_if_block, parse_if_block, parse_spanned_t, TypeKind, parse_maybe_null};
 use pest::iterators::Pair;
 
 #[derive(Debug, Clone)]
@@ -38,18 +38,29 @@ pub(crate) fn parse_statement(pair: Pair<Rule>) -> Spanned<Statement> {
 #[derive(Debug, Clone)]
 pub(crate) struct AssignStatement {
     pub(crate) identifier: Spanned<String>,
-    pub(crate) typ: MaybeNull,
+    pub(crate) typ: Spanned<MaybeNull>,
     pub(crate) expression: Spanned<Expression>,
 }
 
 pub(crate) fn parse_assign_statement(pair: Pair<Rule>) -> Spanned<AssignStatement> {
     let span = pair.as_span();
     let mut pairs = pair.into_inner();
+    
+    let identifier = parse_spanned_t(next_pair!(pairs));
+    let mut typ = Spanned::default();
+    
+    let mut next = next_pair!(pairs);
+    if next.as_rule() == Rule::dtype {
+        typ = parse_maybe_null(next);
+        next = next_pair!(pairs);
+    }
+    
+    let expression = parse_expression(next);
     Spanned::new(
         AssignStatement {
-            identifier: parse_spanned_t(next_pair!(pairs)),
-            typ: MaybeNull::alloc_unknown(TypeKind::Int),
-            expression: parse_expression(next_pair!(pairs)),
+            identifier,
+            typ,
+            expression,
         },
         span.into(),
     )

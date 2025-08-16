@@ -11,6 +11,7 @@ mod invoke;
 mod op;
 mod statement;
 mod types;
+mod array;
 
 pub(crate) use block::*;
 pub(crate) use expr::*;
@@ -23,7 +24,7 @@ pub(crate) use types::*;
 use crate::parser::Rule;
 use miette::SourceSpan;
 use pest::iterators::Pair;
-use std::fmt::{Debug, Display};
+use std::fmt::{Debug};
 use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
 

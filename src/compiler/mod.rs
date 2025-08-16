@@ -1,5 +1,6 @@
 mod context;
 mod llvm;
+mod built_in;
 
 use crate::parser::ast::Statement::If;
 use crate::parser::ast::{AssignStatement, BinaryOp, Block, ControlStatement, DType, Expression, Function, IfStatement, LoopStatement, Program, ReturnStatement, Spanned, Statement, Type};
@@ -205,10 +206,6 @@ impl<'ctx> Compiler<'ctx> {
             .get_parent()
             .unwrap();
 
-        let entry_block_name = self.ir_builder.get_insert_block().unwrap().get_name().to_string_lossy().to_string();
-        println!("-> Entering compile_loop_statement from block: {}", entry_block_name);
-
-
         let loop_body = self.context.append_basic_block(function, "loop.body");
         let after_loop = self.context.append_basic_block(function, "loop.exit");
 
@@ -219,23 +216,10 @@ impl<'ctx> Compiler<'ctx> {
         self.ir_builder
             .build_unconditional_branch(loop_body)
             .unwrap();
-        println!("   Added `br label %loop.body` to block `{}`", entry_block_name);
         self.ir_builder.position_at_end(loop_body);
-
-        println!("   Builder positioned at start of `loop.body`");
-
-        // 打印 loop.body 在编译前的状态
-        println!("   `loop.body` terminator before compile_block: {:?}", loop_body.get_terminator());
 
         self.compile_block(&stat.block);
 
-        let current_block_after_compile = self.ir_builder.get_insert_block().unwrap();
-        println!("<- Exited compile_block. Builder is now at: {}", current_block_after_compile.get_name().to_str().unwrap());
-
-        // 打印 loop.body 在编译后的状态
-        println!("   `loop.body` terminator after compile_block: {:?}", loop_body.get_terminator());
-
-        // Check whether there are terminator instructions in this block (such as break).
         if self
             .ir_builder
             .get_insert_block()
@@ -252,7 +236,6 @@ impl<'ctx> Compiler<'ctx> {
     }
 
     fn compile_break(&self) {
-        println!("Compiling break in basic block {}", self.ir_builder.get_insert_block().unwrap().get_name().to_string_lossy().to_string());
         if let Some(loop_ctx) = self.loop_context.last() {
             self.ir_builder
                 .build_unconditional_branch(loop_ctx.break_block)
@@ -348,6 +331,9 @@ impl<'ctx> Compiler<'ctx> {
         let fn_type = return_type.fn_type(&fn_args_types, false);
 
         let function = self.module.add_function(&function_name, fn_type, None);
+        // for recursive function
+        self.functions.insert(function_name, function);
+
         let entry_block = self.context.append_basic_block(function, "entry");
 
         self.ir_builder.position_at_end(entry_block);
@@ -359,7 +345,6 @@ impl<'ctx> Compiler<'ctx> {
         });
 
         if function.verify(true) {
-            self.functions.insert(function_name, function);
             return Ok(());
         }
 
@@ -412,6 +397,7 @@ impl<'ctx> Compiler<'ctx> {
 
                 call_site_value.try_as_basic_value().left().unwrap()
             }
+            Expression::Array(array) => todo!(),
         }
     }
 

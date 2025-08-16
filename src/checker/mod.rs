@@ -3,7 +3,7 @@ mod solver;
 pub use solver::*;
 
 use crate::error::SemanticError;
-use crate::parser::ast::{Block, DType, Expression, Function, IfStatement, Invoke, MaybeNull, Program, Span, Spanned, Statement, TypeKind};
+use crate::parser::ast::{BinaryOp, Block, DType, Expression, Function, IfStatement, Invoke, MaybeNull, Program, Span, Spanned, Statement, TypeKind};
 use either::Either;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -17,6 +17,12 @@ pub fn alloc_type_idx() -> u64 {
 macro_rules! both_known {
     ($a:expr, $b:expr) => {
         !$a.is_unknown() && !$b.is_unknown()
+    };
+}
+
+macro_rules! both_unknown {
+    ($a:expr, $b:expr) => {
+        $a.is_unknown() && $b.is_unknown()
     };
 }
 
@@ -181,27 +187,33 @@ impl TypeChecker {
                     );
                 }
                 Expression::Invoke(invoke) => {
-                    let function =
-                        self.get_function_define(&invoke.identifier, invoke.identifier.span)?;
-                    if function.return_type.node != self.return_type.node {
-                        return Err(SemanticError::ReturnTypeMismatch {
-                            expected: self.return_type,
-                            found: function.return_type,
-                        });
-                    }
+                    // we can ignore this returned value because we needn't it
+                    let _ = self.infer_invoke_expression(invoke);
                 }
+                Expression::Array(array) => {}
             },
             Statement::Assign(assign) => {
                 let typ = self.infer_expression(&assign.expression)?;
+
+                // an assign statement may contain type annotation
+                if both_known!(typ, assign.typ) && typ != *assign.typ {
+                    return Err(SemanticError::TypeMismatch {
+                        expected: assign.typ,
+                        found: Spanned::new(typ, assign.expression.span),
+                    })
+                }
+
                 self.add_bound(
                     TypeBound::Equals(
-                        Spanned::new(assign.typ, assign.span),
+                        Spanned::new(*assign.typ, assign.span),
                         Spanned::new(typ, assign.expression.span),
                     )
                 );
+
+                let typ = if !assign.typ.is_unknown() { assign.typ } else { Spanned::empty(typ) };
                 self.symbols.insert(
                     (*assign.identifier).clone(),
-                    Spanned::new(typ, Span::empty()),
+                    typ,
                 );
             }
             Statement::If(stat) => {
@@ -231,6 +243,7 @@ impl TypeChecker {
 
     fn infer_binary_op_expression(
         &mut self,
+        op: &BinaryOp,
         lhs: &Spanned<Expression>,
         rhs: &Spanned<Expression>,
     ) -> Result<MaybeNull, SemanticError> {
@@ -250,7 +263,11 @@ impl TypeChecker {
                 Spanned::new(rhs_typ, rhs.span),
             )
         );
-        Ok(lhs_typ)
+
+        if op.is_arithmetic() {
+            return Ok(lhs_typ)
+        }
+        Ok(MaybeNull::nonnull(DType::Bool))
     }
 
     fn infer_invoke_expression(
@@ -308,8 +325,9 @@ impl TypeChecker {
                 );
                 Ok(*defined)
             }
-            Expression::BinaryOp { lhs, rhs, .. } => self.infer_binary_op_expression(lhs, rhs),
+            Expression::BinaryOp { lhs, rhs, op } => self.infer_binary_op_expression(op, lhs, rhs),
             Expression::Invoke(invoke) => self.infer_invoke_expression(invoke),
+            Expression::Array(array) => todo!(),
         }
     }
 
